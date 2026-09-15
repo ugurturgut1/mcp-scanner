@@ -20,6 +20,10 @@ dev = [
     "pytest-asyncio",
     "pytest-cov",
 ]
+llm = [
+    "anthropic>=0.70",
+    "pydantic>=2",
+]
 
 [project.scripts]
 mcp-scanner = "mcp_scanner.cli:main"

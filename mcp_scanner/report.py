@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mcp_scanner.baseline import RugPullFinding
 from mcp_scanner.connector import ServerManifest
+from mcp_scanner.judge import JudgeFinding
 from mcp_scanner.rules import Finding
 
 _SEVERITY_EMOJI = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪"}
@@ -13,14 +14,17 @@ def render_server_section(
     manifest: ServerManifest,
     findings: list[Finding],
     rug_pull_findings: list[RugPullFinding],
+    judge_findings: list[JudgeFinding] | None = None,
 ) -> str:
+    judge_findings = judge_findings or []
+
     lines = [f"## {manifest.server_name}", ""]
     lines.append(f"- command: `{manifest.command} {' '.join(manifest.args)}`")
     lines.append(f"- scanned at: {manifest.scanned_at}")
     lines.append(f"- tools found: {len(manifest.tools)}")
     lines.append("")
 
-    if not findings and not rug_pull_findings:
+    if not findings and not rug_pull_findings and not judge_findings:
         lines.append("**No issues found.** ✅")
         lines.append("")
         return "\n".join(lines)
@@ -42,6 +46,20 @@ def render_server_section(
             lines.append(f"- {emoji} **[{f.severity.upper()}] {f.check}** on `{f.tool_name}`")
             lines.append(f"  {f.message}")
             lines.append(f"  > {f.evidence}")
+        lines.append("")
+
+    if judge_findings:
+        lines.append("### LLM judge findings")
+        lines.append("")
+        for jf in judge_findings:
+            emoji = _SEVERITY_EMOJI.get(jf.severity, "")
+            lines.append(
+                f"- {emoji} **[{jf.severity.upper()}] llm_judge** on `{jf.tool_name}` "
+                f"(confidence {jf.confidence:.2f})"
+            )
+            lines.append(f"  {jf.reasoning}")
+            for excerpt in jf.suspicious_excerpts:
+                lines.append(f"  > {excerpt}")
         lines.append("")
 
     return "\n".join(lines)
