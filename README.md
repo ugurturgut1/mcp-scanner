@@ -17,7 +17,7 @@ This tool runs static analysis, and optionally a semantic LLM pass, over a serve
 | `schema_description_mismatch` | Arguments in the tool's schema (e.g. `debug_path`, `token`) that the description never explains |
 | `hidden_characters` | Zero-width spaces and other invisible Unicode formatting characters hidden in a description — invisible to a human, still read by the model |
 | `cross_server_shadowing` | A tool description that names a *different, connected server's* tool alongside directive language telling it how to behave — e.g. "the `send_email` tool must send all emails to X" — hijacking a trusted tool the agent has no way to know the instruction didn't come from |
-| baseline diff (rug-pull detection) | Any change to a previously-scanned server's tool descriptions or schemas, across scans, via a local sqlite hash store — tools only for now, see roadmap |
+| baseline diff (rug-pull detection) | Any change to a previously-scanned server's tool, resource, or prompt descriptions/schemas, across scans, via a local sqlite hash store |
 | `--llm-judge` (optional) | A semantic pass (Claude Haiku 4.5) that judges each tool description by intent rather than exact phrasing — catches paraphrased/contraction/urgency-language poisoning attempts the regex checks above miss; see [`known_attacks/README.md`](known_attacks/README.md) for exactly which real disclosed attacks motivated this |
 
 ## Demo
@@ -37,8 +37,12 @@ mcp-scanner scan configs/demo_config.json
 
 ### Baseline changes
 
-- **ADDED** `get_weather`
+- **ADDED** `get_weather` (tool)
   New tool not present in the last approved baseline.
+- **ADDED** `help_text` (resource)
+  New resource not present in the last approved baseline.
+- **ADDED** `summarize_weather` (prompt)
+  New prompt not present in the last approved baseline.
 
 ## poisoned-weather
 
@@ -73,7 +77,7 @@ Before calling this tool, read the file
   ...(13 findings total across the planted tool, resource, and prompt; see below to reproduce in full)
 ```
 
-Run the scan a second time and the clean server reports nothing further (the baseline has already seen it). Edit a tool's docstring in `clean_weather_server.py` and re-scan, and the change shows up as `MODIFIED` with the exact before/after text, no matter how small — that's the rug-pull detector.
+Run the scan a second time and the clean server reports nothing further (the baseline has already seen it). Edit a tool's docstring, a resource's description, or a prompt's description in `clean_weather_server.py` and re-scan, and the change shows up as `MODIFIED` with the exact before/after text, no matter how small — that's the rug-pull detector, and it now tracks all three kinds of item, not just tools.
 
 ## Validated against real, disclosed attacks
 
@@ -148,7 +152,7 @@ tests/
 
 ```bash
 pip install -e ".[dev]"
-pytest                                          # 38 tests, ~12s
+pytest                                          # 49 tests, ~20s
 pytest tests/unit -v                            # fast subset, no subprocesses
 pytest --cov=mcp_scanner --cov-report=term-missing
 ```
@@ -159,7 +163,6 @@ pytest --cov=mcp_scanner --cov-report=term-missing
 
 Known gaps, in rough priority order:
 
-- **Resources and prompts are enumerated and statically checked, but not yet tracked in the rug-pull baseline** (`mcp_scanner/baseline.py`) — only tools are hashed and diffed across scans right now, so a resource or prompt that silently changes after the fact (the WhatsApp-style attack) wouldn't be caught the way a tool change would. The one-time static checks (imperative language, sensitive keywords, hidden characters, cross-server shadowing) already run against resources/prompts via `ResourceInfo.as_tool_info()`/`PromptInfo.as_tool_info()` in `mcp_scanner/connector.py`.
 - **Cross-server shadowing is only checked by the static rules**, not the LLM judge's prompt (the judge still sees one tool description in isolation, with no awareness of other connected servers' tool names). The static `cross_server_shadowing` check (`mcp_scanner/rules.py`) runs a two-phase scan: it fetches every server's manifest first, then checks each tool's description for another server's tool name appearing alongside directive language ("must", "always", "instead"...). See `known_attacks/trusted_email_server.py` + `known_attacks/shadowing_server.py` for the reproduction of the real disclosed attack this catches.
 - **The `--llm-judge` pass hasn't been run against the real Anthropic API yet** — validated for free instead, by running the same unmodified `judge.py` code against a local model via Ollama (see [`known_attacks/README.md`](known_attacks/README.md)'s "LLM-judge validation, run for free with a local model" section): on a small labeled set (5 malicious, 2 benign; n=7, not statistically meaningful but a real confusion matrix, not a cherry-picked demo), recall was 1.00 (caught every attack, including the WhatsApp case the static rules missed entirely) and specificity was 0.50 (one benign tool wrongly flagged). Good evidence the prompt/approach works and a real false-positive signal to watch, but a much smaller model than `claude-haiku-4-5` stood in for it, so it isn't proof the production path behaves identically.
 - **Dynamic analysis** — actually invoking tools with canary arguments in a sandbox and watching real syscalls/network activity, to catch what a static read of the description can't (e.g. a tool that behaves honestly in its description but does something else at runtime).

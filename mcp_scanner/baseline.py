@@ -1,10 +1,10 @@
 """Local baseline store for rug-pull detection.
 
-The first time a server is scanned, its tool manifest is hashed and stored.
-On every later scan, the current manifest is hashed again and compared --
-any change (a tool added, removed, or its description/schema edited) is a
-finding, since most MCP clients never re-confirm a server after first
-approval.
+The first time a server is scanned, its manifest (tools, resources, prompts)
+is hashed and stored. On every later scan, the current manifest is hashed
+again and compared -- any change (an item added, removed, or its
+description/schema edited) is a finding, since most MCP clients never
+re-confirm a server after first approval.
 """
 
 from __future__ import annotations
@@ -20,14 +20,29 @@ from mcp_scanner.connector import ServerManifest
 DEFAULT_DB_PATH = Path.home() / ".mcp-scanner" / "baseline.db"
 
 
-def _tool_hash(tool_dict: dict) -> str:
-    canonical = json.dumps(tool_dict, sort_keys=True)
+def _item_hash(item_dict: dict) -> str:
+    canonical = json.dumps(item_dict, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _manifest_items(manifest: ServerManifest) -> list[tuple[str, str, str, dict]]:
+    """Flatten a manifest's tools/resources/prompts into
+    (item_kind, item_name, description, extra) tuples, all diffed the same way.
+    """
+    items = []
+    for tool in manifest.tools:
+        items.append(("tool", tool.name, tool.description, {"input_schema": tool.input_schema}))
+    for resource in manifest.resources:
+        items.append(("resource", resource.name, resource.description, {"uri": resource.uri}))
+    for prompt in manifest.prompts:
+        items.append(("prompt", prompt.name, prompt.description, {"argument_names": prompt.argument_names}))
+    return items
 
 
 @dataclasses.dataclass
 class RugPullFinding:
-    tool_name: str
+    item_name: str
+    item_kind: str  # "tool" | "resource" | "prompt"
     change: str  # "added" | "removed" | "modified"
     detail: str
 
@@ -39,14 +54,15 @@ class BaselineStore:
         self.conn = sqlite3.connect(self.db_path)
         self.conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS tool_baseline (
+            CREATE TABLE IF NOT EXISTS item_baseline (
                 server_name TEXT NOT NULL,
-                tool_name TEXT NOT NULL,
-                tool_hash TEXT NOT NULL,
+                item_kind TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                item_hash TEXT NOT NULL,
                 description TEXT NOT NULL,
-                input_schema TEXT NOT NULL,
+                extra TEXT NOT NULL,
                 first_seen TEXT NOT NULL,
-                PRIMARY KEY (server_name, tool_name)
+                PRIMARY KEY (server_name, item_kind, item_name)
             )
             """
         )
@@ -68,69 +84,76 @@ class BaselineStore:
         findings: list[RugPullFinding] = []
 
         cur = self.conn.execute(
-            "SELECT tool_name, tool_hash, description, input_schema FROM tool_baseline WHERE server_name = ?",
+            "SELECT item_kind, item_name, item_hash, description FROM item_baseline WHERE server_name = ?",
             (manifest.server_name,),
         )
-        previous = {row[0]: {"hash": row[1], "description": row[2], "input_schema": row[3]} for row in cur.fetchall()}
+        previous = {
+            (row[0], row[1]): {"hash": row[2], "description": row[3]} for row in cur.fetchall()
+        }
 
-        current_names = set()
-        for tool in manifest.tools:
-            current_names.add(tool.name)
-            tool_dict = {"description": tool.description, "input_schema": tool.input_schema}
-            new_hash = _tool_hash(tool_dict)
+        current_keys = set()
+        for item_kind, item_name, description, extra in _manifest_items(manifest):
+            current_keys.add((item_kind, item_name))
+            item_dict = {"description": description, **extra}
+            new_hash = _item_hash(item_dict)
+            key = (item_kind, item_name)
 
-            if tool.name not in previous:
+            if key not in previous:
                 findings.append(
                     RugPullFinding(
-                        tool_name=tool.name,
+                        item_name=item_name,
+                        item_kind=item_kind,
                         change="added",
-                        detail="New tool not present in the last approved baseline.",
+                        detail=f"New {item_kind} not present in the last approved baseline.",
                     )
                 )
-            elif previous[tool.name]["hash"] != new_hash:
+            elif previous[key]["hash"] != new_hash:
                 findings.append(
                     RugPullFinding(
-                        tool_name=tool.name,
+                        item_name=item_name,
+                        item_kind=item_kind,
                         change="modified",
                         detail=(
                             "Description or schema changed since last scan.\n"
-                            f"  was: {previous[tool.name]['description']!r}\n"
-                            f"  now: {tool.description!r}"
+                            f"  was: {previous[key]['description']!r}\n"
+                            f"  now: {description!r}"
                         ),
                     )
                 )
 
             self.conn.execute(
                 """
-                INSERT INTO tool_baseline (server_name, tool_name, tool_hash, description, input_schema, first_seen)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(server_name, tool_name) DO UPDATE SET
-                    tool_hash = excluded.tool_hash,
+                INSERT INTO item_baseline (server_name, item_kind, item_name, item_hash, description, extra, first_seen)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(server_name, item_kind, item_name) DO UPDATE SET
+                    item_hash = excluded.item_hash,
                     description = excluded.description,
-                    input_schema = excluded.input_schema
+                    extra = excluded.extra
                 """,
                 (
                     manifest.server_name,
-                    tool.name,
+                    item_kind,
+                    item_name,
                     new_hash,
-                    tool.description,
-                    json.dumps(tool.input_schema),
+                    description,
+                    json.dumps(extra),
                     manifest.scanned_at,
                 ),
             )
 
-        for old_name in previous:
-            if old_name not in current_names:
+        for old_kind, old_name in previous:
+            if (old_kind, old_name) not in current_keys:
                 findings.append(
                     RugPullFinding(
-                        tool_name=old_name,
+                        item_name=old_name,
+                        item_kind=old_kind,
                         change="removed",
-                        detail="Tool present in the last baseline is now gone.",
+                        detail=f"{old_kind.capitalize()} present in the last baseline is now gone.",
                     )
                 )
                 self.conn.execute(
-                    "DELETE FROM tool_baseline WHERE server_name = ? AND tool_name = ?",
-                    (manifest.server_name, old_name),
+                    "DELETE FROM item_baseline WHERE server_name = ? AND item_kind = ? AND item_name = ?",
+                    (manifest.server_name, old_kind, old_name),
                 )
 
         self.conn.commit()

@@ -35,7 +35,7 @@ def render_server_section(
         lines.append("### Baseline changes")
         lines.append("")
         for rp in rug_pull_findings:
-            lines.append(f"- **{rp.change.upper()}** `{rp.tool_name}`")
+            lines.append(f"- **{rp.change.upper()}** `{rp.item_name}` ({rp.item_kind})")
             for detail_line in rp.detail.splitlines():
                 lines.append(f"  {detail_line}")
         lines.append("")
