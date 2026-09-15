@@ -22,6 +22,8 @@ def render_server_section(
     lines.append(f"- command: `{manifest.command} {' '.join(manifest.args)}`")
     lines.append(f"- scanned at: {manifest.scanned_at}")
     lines.append(f"- tools found: {len(manifest.tools)}")
+    lines.append(f"- resources found: {len(manifest.resources)}")
+    lines.append(f"- prompts found: {len(manifest.prompts)}")
     lines.append("")
 
     if not findings and not rug_pull_findings and not judge_findings:

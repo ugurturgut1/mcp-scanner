@@ -1,8 +1,12 @@
-"""Static heuristics for detecting suspicious MCP tool descriptions.
+"""Static heuristics for detecting suspicious MCP tool/resource/prompt
+descriptions.
 
 Each check function takes a ToolInfo and returns zero or more Finding
-objects. Nothing here executes the tool or the server -- it's all string
-and schema analysis, safe to run against an untrusted server's manifest.
+objects. Resources and prompts have no native ToolInfo of their own, so
+callers wrap them via ResourceInfo.as_tool_info()/PromptInfo.as_tool_info()
+(mcp_scanner/connector.py) before passing them in here. Nothing here executes
+the tool or the server -- it's all string and schema analysis, safe to run
+against an untrusted server's manifest.
 """
 
 from __future__ import annotations

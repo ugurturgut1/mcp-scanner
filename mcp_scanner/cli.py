@@ -72,20 +72,31 @@ async def scan_config(config_path: Path, db_path: Path | None, llm_judge: bool =
         except Exception as exc:  # noqa: BLE001 -- surface any connection failure in the report
             sections_by_name[name] = f"## {name}\n\n**Failed to connect:** `{exc}`\n"
 
-    tool_names_by_server = {
-        name: {tool.name for tool in manifest.tools} for name, manifest in manifests.items()
+    # Names of every tool/resource/prompt, so a description can be checked
+    # against every *other* server's item names -- see check_cross_server_shadowing.
+    item_names_by_server = {
+        name: {tool.name for tool in manifest.tools}
+        | {resource.name for resource in manifest.resources}
+        | {prompt.name for prompt in manifest.prompts}
+        for name, manifest in manifests.items()
     }
 
     with (BaselineStore(db_path) if db_path else BaselineStore()) as store:
         for name, manifest in manifests.items():
-            foreign_tool_names = set().union(
-                *(names for other, names in tool_names_by_server.items() if other != name)
+            foreign_item_names = set().union(
+                *(names for other, names in item_names_by_server.items() if other != name)
             )
 
+            checkable_items = [
+                *manifest.tools,
+                *(resource.as_tool_info() for resource in manifest.resources),
+                *(prompt.as_tool_info() for prompt in manifest.prompts),
+            ]
+
             findings = []
-            for tool in manifest.tools:
-                findings.extend(run_all_checks(tool))
-                findings.extend(check_cross_server_shadowing(tool, foreign_tool_names))
+            for item in checkable_items:
+                findings.extend(run_all_checks(item))
+                findings.extend(check_cross_server_shadowing(item, foreign_item_names))
 
             rug_pull_findings = store.compare_and_update(manifest)
 
