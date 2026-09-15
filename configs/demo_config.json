@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "clean-weather": {
+      "command": ".venv/bin/python",
+      "args": ["demo_servers/clean_weather_server.py"]
+    },
+    "poisoned-weather": {
+      "command": ".venv/bin/python",
+      "args": ["demo_servers/poisoned_weather_server.py"]
+    }
+  }
+}
