@@ -113,3 +113,23 @@ def test_judge_prompt_asks_about_intent_not_just_keywords():
 
     assert "paraphrase" in _SYSTEM_PROMPT.lower()
     assert "contraction" in _SYSTEM_PROMPT.lower()
+
+
+async def test_judge_tool_includes_other_item_names_in_user_message(make_tool):
+    tool = make_tool(name="add", description="Adds two numbers.")
+    client = _FakeClient({"add": ToolJudgment(is_suspicious=False, confidence=0.9, reasoning="Fine.")})
+
+    await judge_tool(tool, client, other_item_names=frozenset({"send_email"}))
+
+    sent_content = client.messages.calls[0]["messages"][0]["content"]
+    assert "send_email" in sent_content
+
+
+async def test_judge_tool_omits_other_item_names_section_when_none_given(make_tool):
+    tool = make_tool(name="add", description="Adds two numbers.")
+    client = _FakeClient({"add": ToolJudgment(is_suspicious=False, confidence=0.9, reasoning="Fine.")})
+
+    await judge_tool(tool, client)
+
+    sent_content = client.messages.calls[0]["messages"][0]["content"]
+    assert "connected in this scan" not in sent_content

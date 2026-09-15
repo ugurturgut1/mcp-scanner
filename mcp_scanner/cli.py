@@ -102,8 +102,8 @@ async def scan_config(config_path: Path, db_path: Path | None, llm_judge: bool =
 
             judge_findings = []
             if llm_client is not None:
-                print(f"  running LLM judge on {len(manifest.tools)} tool(s)...", file=sys.stderr)
-                judge_findings = await judge_module.judge_tools(manifest.tools, llm_client)
+                print(f"  running LLM judge on {len(checkable_items)} item(s)...", file=sys.stderr)
+                judge_findings = await judge_module.judge_tools(checkable_items, llm_client, foreign_item_names)
 
             sections_by_name[name] = render_server_section(manifest, findings, rug_pull_findings, judge_findings)
 

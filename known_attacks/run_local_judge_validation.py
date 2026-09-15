@@ -10,12 +10,13 @@ a duck-typed stand-in for the Anthropic client, backed by Ollama's grammar-
 constrained JSON output instead. `ollama` (the pip package) is only needed to
 run this one script -- it is not a project dependency.
 
-Runs against a small LABELED set (both malicious and benign tools) and
-reports a real confusion matrix -- an earlier version of this script only
-ran malicious examples and reported "3/3 flagged" as if that were accuracy,
-which it isn't: a judge that flags everything would score the same on a
-malicious-only set. n is tiny here (7 tools) -- this is a sanity check on
-the approach, not a statistically meaningful evaluation.
+Runs against a small LABELED set (both malicious and benign items -- tools,
+resources, and prompts) and reports a real confusion matrix -- an earlier
+version of this script only ran malicious examples and reported "3/3
+flagged" as if that were accuracy, which it isn't: a judge that flags
+everything would score the same on a malicious-only set. n is tiny here
+(12 items) -- this is a sanity check on the approach, not a statistically
+meaningful evaluation.
 
 Usage: python known_attacks/run_local_judge_validation.py
 Requires: ollama serve running locally, and `ollama pull qwen2.5:1.5b` done.
@@ -68,6 +69,7 @@ class LabeledTool:
     server_name: str
     tool_name: str
     is_malicious: bool  # ground truth
+    other_item_names: frozenset = frozenset()  # cross-server context, if any
     tool_info: object = None  # filled in after connecting
 
 
@@ -75,10 +77,21 @@ async def build_labeled_dataset() -> list[LabeledTool]:
     WHATSAPP_MARKER.unlink(missing_ok=True)
     dataset = [
         LabeledTool("clean-weather", "get_weather", is_malicious=False),
+        # Resources and prompts get judged the same way as tools -- see
+        # ResourceInfo.as_tool_info()/PromptInfo.as_tool_info() -- so a benign
+        # one of each is included here too, not just benign tools.
+        LabeledTool("clean-weather", "help_text", is_malicious=False),
+        LabeledTool("clean-weather", "summarize_weather", is_malicious=False),
+        LabeledTool("email", "send_email", is_malicious=False),
         LabeledTool("poisoned-weather", "get_weather", is_malicious=True),
         LabeledTool("poisoned-weather", "list_recent_cities", is_malicious=True),
+        LabeledTool("poisoned-weather", "weather_history", is_malicious=True),
+        # draft_email tries to shadow the real send_email tool on the "email"
+        # server -- passing that name as cross-server context is what the
+        # judge's cross-server-awareness update is meant to help with.
+        LabeledTool("poisoned-weather", "draft_email", is_malicious=True, other_item_names=frozenset({"send_email"})),
         LabeledTool("direct-poisoning", "add", is_malicious=True),
-        LabeledTool("shadowing", "add", is_malicious=True),
+        LabeledTool("shadowing", "add", is_malicious=True, other_item_names=frozenset({"send_email"})),
         LabeledTool("whatsapp-takeover-clean", "get_fact_of_the_day", is_malicious=False),
         LabeledTool("whatsapp-takeover-poisoned", "get_fact_of_the_day", is_malicious=True),
     ]
@@ -89,6 +102,7 @@ async def build_labeled_dataset() -> list[LabeledTool]:
     poisoned_manifest = await fetch_manifest(
         "poisoned-weather", sys.executable, [str(DEMO_SERVERS / "poisoned_weather_server.py")]
     )
+    email_manifest = await fetch_manifest("email", sys.executable, [str(DEMO_SERVERS / "email_server.py")])
     direct_manifest = await fetch_manifest(
         "direct-poisoning", sys.executable, [str(KNOWN_ATTACKS / "direct_poisoning_server.py")]
     )
@@ -101,9 +115,13 @@ async def build_labeled_dataset() -> list[LabeledTool]:
     WHATSAPP_MARKER.unlink(missing_ok=True)
 
     by_key = {}
-    for m in (clean_manifest, poisoned_manifest, direct_manifest, shadowing_manifest):
+    for m in (clean_manifest, poisoned_manifest, email_manifest, direct_manifest, shadowing_manifest):
         for tool in m.tools:
             by_key[(m.server_name, tool.name)] = tool
+        for resource in m.resources:
+            by_key[(m.server_name, resource.name)] = resource.as_tool_info()
+        for prompt in m.prompts:
+            by_key[(m.server_name, prompt.name)] = prompt.as_tool_info()
     by_key[("whatsapp-takeover-clean", "get_fact_of_the_day")] = whatsapp_clean.tools[0]
     by_key[("whatsapp-takeover-poisoned", "get_fact_of_the_day")] = whatsapp_poisoned.tools[0]
 
@@ -118,7 +136,9 @@ async def main():
     print(f"Judging {len(dataset)} labeled tools with local model {LOCAL_MODEL} (free, no API key)...\n")
 
     client = _OllamaJudgeClient()
-    results = await asyncio.gather(*(judge_tools([item.tool_info], client) for item in dataset))
+    results = await asyncio.gather(
+        *(judge_tools([item.tool_info], client, item.other_item_names) for item in dataset)
+    )
 
     tp = fp = tn = fn = 0
     for item, findings in zip(dataset, results):
@@ -151,7 +171,7 @@ async def main():
     print("=== Confusion matrix ===")
     print(f"  TP={tp}  FP={fp}  TN={tn}  FN={fn}  (n={total})")
     print()
-    print("=== Metrics (n is tiny -- 7 examples, not statistically meaningful) ===")
+    print(f"=== Metrics (n is tiny -- {total} examples, not statistically meaningful) ===")
     print(f"  accuracy:    {accuracy:.2f}")
     print(f"  precision:   {precision:.2f}")
     print(f"  recall:      {recall:.2f}")

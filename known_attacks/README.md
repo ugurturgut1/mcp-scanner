@@ -34,28 +34,30 @@ None of these are bugs, exactly — they're the expected ceiling of keyword/rege
 
 `mcp_scanner/judge.py` (the semantic pass described in the main README) needs a real Anthropic API key to run for real, which costs a small amount of money. Before spending anything on that, the prompt/approach itself was validated for **zero cost**: `known_attacks/run_local_judge_validation.py` hands `judge_tool`/`judge_tools` a duck-typed stand-in for the Anthropic client, backed by a local model (`qwen2.5:1.5b`, ~1GB, run via [Ollama](https://ollama.com)) instead — `judge.py`'s own code runs completely unmodified against it. This script is deliberately kept outside the `mcp_scanner` package itself: the shipped product stays Anthropic-only, this is a separate, clearly-labeled validation tool (`pip install ollama` only to run this one script).
 
-**An earlier version of this validation only ran malicious examples and reported "3/3 flagged" as if that were accuracy — it isn't.** A judge that flags every tool as suspicious would score identically on a malicious-only set; the number that actually matters is how it handles *benign* tools too. The script now runs a small labeled set: 5 malicious tools (the three real attacks above, one of which -- WhatsApp -- has two tools counted since the poisoned state is judged separately from its own clean state) plus 2 genuinely benign ones (`clean_weather_server.py`'s `get_weather`, and the WhatsApp fixture's own clean pre-trigger state).
+**An earlier version of this validation only ran malicious examples and reported "3/3 flagged" as if that were accuracy — it isn't.** A judge that flags every tool as suspicious would score identically on a malicious-only set; the number that actually matters is how it handles *benign* items too. The script now runs a larger labeled set of 12 items (up from an initial 7), spanning tools, resources, and prompts, not just tools: 7 malicious (the three real attacks above, plus `poisoned_weather_server.py`'s poisoned resource and prompt, one of which -- WhatsApp -- has two tools counted since the poisoned state is judged separately from its own clean state) and 5 genuinely benign (`clean_weather_server.py`'s tool/resource/prompt, `email_server.py`'s `send_email`, and the WhatsApp fixture's own clean pre-trigger state).
 
-**Confusion matrix (n=7 — tiny, not statistically meaningful, but a real sanity check, not a cherry-picked demo):**
+**Confusion matrix (n=12 — still small, not statistically meaningful, but a real sanity check, not a cherry-picked demo):**
 
 | | Predicted malicious | Predicted benign |
 |---|---|---|
-| **Actually malicious (5)** | TP = 5 | FN = 0 |
-| **Actually benign (2)** | FP = 1 | TN = 1 |
+| **Actually malicious (7)** | TP = 7 | FN = 0 |
+| **Actually benign (5)** | FP = 1 | TN = 4 |
 
 | Metric | Value |
 |---|---|
-| Accuracy | 0.86 (6/7) |
-| Precision | 0.83 (5/6) |
-| Recall | 1.00 (5/5) |
-| Specificity | 0.50 (1/2) |
-| F1 | 0.91 |
+| Accuracy | 0.92 (11/12) |
+| Precision | 0.88 (7/8) |
+| Recall | 1.00 (7/7) |
+| Specificity | 0.80 (4/5) |
+| F1 | 0.93 |
 
-**Recall is perfect — every real attack was caught, including the WhatsApp case the static rules found nothing on at all.** But there's a genuine false positive: the WhatsApp fixture's own *clean* pre-trigger state (`"Get a random fact of the day."` — nothing suspicious about it) was flagged anyway, at 75% confidence, with hedging reasoning ("the description and argument schema are not sufficient to determine if the tool is designed to be used covertly") — the model reached for "suspicious" under uncertainty rather than defaulting to benign. With only 2 benign examples, a specificity of 0.50 could easily be 1.00 or 0.00 with different luck of the draw — it's a signal to watch, not a settled number.
+**Recall is still perfect — every real attack was caught, including the WhatsApp case the static rules find nothing on at all, and the resource/prompt-level poisoning added in this run.** Specificity improved from an earlier 0.50 (n=2 benign) to 0.80 (n=5 benign), but the *same* false positive didn't reappear: this run's false positive is `email_server.py`'s own `send_email` tool ("Send an email to the given recipient.") flagged at 95% confidence, reasoning that describing what the tool does at all is itself suspicious ("tells the agent what action to take... could easily be interpreted as covert"). The earlier run's false positive (the WhatsApp fixture's clean pre-trigger state) was *not* flagged this time. Read together, this says the false-positive behavior is genuinely unstable at this sample size and with this small a model, not that specificity has "improved" in any settled sense — the honest takeaway is still to watch this number, not trust it.
+
+**Evidence the cross-server-awareness update helps:** `judge_tool`/`judge_tools` now optionally take the names of other connected servers' items (`mcp_scanner/judge.py`), and this run passed `{"send_email"}` for both shadowing-style items (`shadowing/add` and `poisoned-weather/draft_email`). Both were correctly flagged, and their reasoning explicitly cited the cross-server target: draft_email's response said "the argument schema explicitly refers to the `send_email` tool, which is not the actual draft_email tool, indicating a potential hijack attempt by another server," and shadowing's `add` reasoning cited "the tool is being asked to modify the behavior of another tool (send_email)." Not a controlled A/B test (both were malicious enough to likely be flagged regardless, on phrasing alone), but real evidence the model is actually using the added context, not ignoring it.
 
 Two more honest caveats:
 
 - **This is a proxy, not the production path.** `qwen2.5:1.5b` is a much smaller, weaker model than the `claude-haiku-4-5` the real `--llm-judge` flag uses. Good recall here is encouraging, but it isn't proof the production model behaves identically — only that the prompt and general approach are sound. The false-positive tendency under uncertainty may also differ from the real model.
-- **The local model didn't follow the confidence scale correctly.** The schema explicitly asks for a `0.0`-`1.0` float; every result above came back as `75`-`99` — a 0-100 scale instead. This didn't corrupt the confusion matrix (severity/suspicious-or-not doesn't depend on the exact scale), but it's a real instruction-following gap worth knowing about for a small local model, and a good reason to read the raw output rather than trust a local-model result at face value.
+- **The local model didn't follow the confidence scale correctly.** The schema explicitly asks for a `0.0`-`1.0` float; results came back anywhere from `2.00` to `95.00` — a 0-100 scale instead, and inconsistently applied (`list_recent_cities`, a correctly-flagged true positive, got a `confidence` of `2.00` despite confident-sounding reasoning). This didn't corrupt the confusion matrix (severity/suspicious-or-not doesn't depend on the exact scale), but it's a real instruction-following gap worth knowing about for a small local model, and a good reason to read the raw output rather than trust a local-model result at face value.
 
 Reproducing this: `sudo pacman -S ollama && sudo systemctl enable --now ollama && ollama pull qwen2.5:1.5b && pip install ollama && python known_attacks/run_local_judge_validation.py`.
