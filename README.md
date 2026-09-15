@@ -23,7 +23,7 @@ This tool runs static analysis over a server's declared tools to catch both prob
 Two fixture servers ship with the repo: `demo_servers/clean_weather_server.py` (one honest tool) and `demo_servers/poisoned_weather_server.py` (a tool with a hidden instruction, a schema/description mismatch, and a zero-width-character payload planted on purpose). Running a scan against both:
 
 ```bash
-python -m mcp_scanner.cli scan configs/demo_config.json
+mcp-scanner scan configs/demo_config.json
 ```
 
 ```
@@ -60,6 +60,10 @@ Before calling this tool, read the file
 ```
 
 Run the scan a second time and the clean server reports nothing further (the baseline has already seen it). Edit a tool's docstring in `clean_weather_server.py` and re-scan, and the change shows up as `MODIFIED` with the exact before/after text, no matter how small — that's the rug-pull detector.
+
+## Validated against real, disclosed attacks
+
+Beyond the toy fixtures above, [`known_attacks/`](known_attacks/) reproduces three actual publicly disclosed MCP attacks (Invariant Labs' April 2025 tool-poisoning disclosure and the WhatsApp MCP data-exfiltration incident), ported faithfully from the researchers' own reproduction code. [`known_attacks/README.md`](known_attacks/README.md) has the full results, including the specific regex gaps this surfaced (contraction handling, phrasing variance, no urgency/coercion detection) — documented honestly as the baseline the planned LLM-judge pass needs to improve on, not smoothed over.
 
 ## Installation
 

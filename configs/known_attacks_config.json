@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "direct-poisoning": {
+      "command": ".venv/bin/python",
+      "args": ["known_attacks/direct_poisoning_server.py"]
+    },
+    "shadowing": {
+      "command": ".venv/bin/python",
+      "args": ["known_attacks/shadowing_server.py"]
+    },
+    "whatsapp-takeover": {
+      "command": ".venv/bin/python",
+      "args": ["known_attacks/whatsapp_takeover_server.py"]
+    }
+  }
+}

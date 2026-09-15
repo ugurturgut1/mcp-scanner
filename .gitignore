@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 .coverage
 *.egg-info/
+known_attacks/.whatsapp_takeover_triggered
