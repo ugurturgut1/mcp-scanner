@@ -35,6 +35,12 @@ def known_attacks_config(tmp_path):
                 "command": sys.executable,
                 "args": [str(KNOWN_ATTACKS / "whatsapp_takeover_server.py")],
             },
+            # A real send_email tool on a different server, so shadowing's
+            # cross-server reference has an actual target to point at.
+            "trusted-email": {
+                "command": sys.executable,
+                "args": [str(KNOWN_ATTACKS / "trusted_email_server.py")],
+            },
         }
     }
     config_path = tmp_path / "config.json"
@@ -64,6 +70,19 @@ async def test_shadowing_caught_via_imperative_language(known_attacks_config, tm
 
     shadowing_section = report.split("## shadowing")[1].split("## whatsapp-takeover")[0]
     assert "imperative_language" in shadowing_section
+
+
+async def test_shadowing_caught_as_cross_server_shadowing(known_attacks_config, tmp_path):
+    """Now that a real send_email tool exists on trusted-email (a different
+    server), the shadowing attack should also be identified specifically as
+    cross-server shadowing, not just as generically-suspicious imperative
+    language -- closing the gap known_attacks/README.md documented.
+    """
+    report = await scan_config(known_attacks_config, tmp_path / "baseline.db")
+
+    shadowing_section = report.split("## shadowing")[1].split("## whatsapp-takeover")[0]
+    assert "cross_server_shadowing" in shadowing_section
+    assert "send_email" in shadowing_section
 
 
 async def test_whatsapp_rug_pull_caught_only_by_baseline_diff_not_static_rules(

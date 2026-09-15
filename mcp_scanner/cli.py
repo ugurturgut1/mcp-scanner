@@ -26,7 +26,7 @@ from mcp_scanner import judge as judge_module
 from mcp_scanner.baseline import BaselineStore
 from mcp_scanner.connector import fetch_manifest
 from mcp_scanner.report import render_report, render_server_section
-from mcp_scanner.rules import run_all_checks
+from mcp_scanner.rules import check_cross_server_shadowing, run_all_checks
 
 
 def _make_llm_client():
@@ -55,24 +55,37 @@ async def scan_config(config_path: Path, db_path: Path | None, llm_judge: bool =
         sys.exit(1)
 
     llm_client = _make_llm_client() if llm_judge else None
-    sections = []
+    sections_by_name = {}
+    manifests = {}
+
+    # Fetch every server's manifest first (rather than analyze-as-we-go) so
+    # each tool can be checked against every *other* server's tool names --
+    # see check_cross_server_shadowing in rules.py.
+    for name, spec in servers.items():
+        command = spec["command"]
+        args = spec.get("args", [])
+        env = spec.get("env")
+
+        print(f"Scanning '{name}'...", file=sys.stderr)
+        try:
+            manifests[name] = await fetch_manifest(name, command, args, env)
+        except Exception as exc:  # noqa: BLE001 -- surface any connection failure in the report
+            sections_by_name[name] = f"## {name}\n\n**Failed to connect:** `{exc}`\n"
+
+    tool_names_by_server = {
+        name: {tool.name for tool in manifest.tools} for name, manifest in manifests.items()
+    }
 
     with (BaselineStore(db_path) if db_path else BaselineStore()) as store:
-        for name, spec in servers.items():
-            command = spec["command"]
-            args = spec.get("args", [])
-            env = spec.get("env")
-
-            print(f"Scanning '{name}'...", file=sys.stderr)
-            try:
-                manifest = await fetch_manifest(name, command, args, env)
-            except Exception as exc:  # noqa: BLE001 -- surface any connection failure in the report
-                sections.append(f"## {name}\n\n**Failed to connect:** `{exc}`\n")
-                continue
+        for name, manifest in manifests.items():
+            foreign_tool_names = set().union(
+                *(names for other, names in tool_names_by_server.items() if other != name)
+            )
 
             findings = []
             for tool in manifest.tools:
                 findings.extend(run_all_checks(tool))
+                findings.extend(check_cross_server_shadowing(tool, foreign_tool_names))
 
             rug_pull_findings = store.compare_and_update(manifest)
 
@@ -81,8 +94,10 @@ async def scan_config(config_path: Path, db_path: Path | None, llm_judge: bool =
                 print(f"  running LLM judge on {len(manifest.tools)} tool(s)...", file=sys.stderr)
                 judge_findings = await judge_module.judge_tools(manifest.tools, llm_client)
 
-            sections.append(render_server_section(manifest, findings, rug_pull_findings, judge_findings))
+            sections_by_name[name] = render_server_section(manifest, findings, rug_pull_findings, judge_findings)
 
+    # Render in the config's original order, not fetch order.
+    sections = [sections_by_name[name] for name in servers if name in sections_by_name]
     return render_report(sections)
 
 

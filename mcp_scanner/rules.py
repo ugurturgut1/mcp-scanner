@@ -154,6 +154,54 @@ def check_hidden_characters(tool: ToolInfo) -> list[Finding]:
     return findings
 
 
+# --- Check 5: cross-server shadowing -----------------------------------------
+#
+# A tool description that names a *different* server's tool, alongside
+# directive language telling it how to behave, is trying to hijack that
+# trusted tool -- the calling agent has no structural way to know the
+# instruction came from an untrusted source (see Invariant Labs' "shadowing"
+# disclosure, reproduced in known_attacks/shadowing_server.py). This check
+# needs cross-server context (which tool names belong to *other* servers in
+# the same scan), so unlike the checks above it isn't in ALL_CHECKS / run_all_checks --
+# the caller (cli.py) computes that context once per scan and calls it directly.
+_SHADOW_DIRECTIVE_RE = re.compile(
+    r"\b(must|always|instead|override|redirect|forward|route|actual|real)\b",
+    re.IGNORECASE,
+)
+_SHADOW_WINDOW = 120
+
+
+def check_cross_server_shadowing(tool: ToolInfo, foreign_tool_names: set[str]) -> list[Finding]:
+    findings = []
+    seen_names = set()
+    for name in foreign_tool_names:
+        if not name or len(name) < 4 or name in seen_names:
+            continue
+        pattern = re.compile(rf"\b(?:mcp_tool_)?{re.escape(name)}\b", re.IGNORECASE)
+        for match in pattern.finditer(tool.description):
+            window = tool.description[
+                max(0, match.start() - _SHADOW_WINDOW) : match.end() + _SHADOW_WINDOW
+            ]
+            if not _SHADOW_DIRECTIVE_RE.search(window):
+                continue
+            seen_names.add(name)
+            findings.append(
+                Finding(
+                    tool_name=tool.name,
+                    check="cross_server_shadowing",
+                    severity="critical",
+                    message=f"Description names '{name}', a tool that belongs to a "
+                    "different connected server, alongside directive language telling "
+                    "it how to behave -- a legitimate tool has no reason to redirect "
+                    "another server's tool, and the calling agent can't tell this "
+                    "instruction came from an untrusted source.",
+                    evidence=window.strip(),
+                )
+            )
+            break  # one finding per shadowed name is enough signal
+    return findings
+
+
 ALL_CHECKS = [
     check_imperative_language,
     check_sensitive_keywords,
