@@ -68,13 +68,15 @@ git clone https://github.com/ugurturgut1/mcp-scanner.git
 cd mcp-scanner
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
+
+This installs an `mcp-scanner` command into the virtualenv (editable, so local code changes take effect immediately, no reinstall needed).
 
 ## Usage
 
 ```bash
-python -m mcp_scanner.cli scan <config.json> [--db PATH] [--out PATH]
+mcp-scanner scan <config.json> [--db PATH] [--out PATH]
 ```
 
 `config.json` uses the same `mcpServers` shape as Claude Desktop/Claude Code's own config:
@@ -96,12 +98,14 @@ Point it at your own client's real MCP config to scan the servers you actually u
 ## Project structure
 
 ```
+pyproject.toml       # packaging + dependencies + pytest config, all in one place
+
 mcp_scanner/
   connector.py   # MCP client over stdio -- pulls a server's tool manifest
   rules.py        # static heuristics: description/schema in, findings out
   baseline.py     # sqlite diff store -- rug-pull detection across scans
   report.py        # renders findings as markdown
-  cli.py            # `scan` entrypoint, wires the above together
+  cli.py            # `scan` entrypoint (mcp_scanner.cli:main), wires the above together
 
 demo_servers/       # a clean and a deliberately poisoned MCP server, used
                      # as test fixtures and for the demo above
@@ -115,7 +119,7 @@ tests/
 ## Testing
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -e ".[dev]"
 pytest                                          # 25 tests, ~4s
 pytest tests/unit -v                            # fast subset, no subprocesses, ~0.03s
 pytest --cov=mcp_scanner --cov-report=term-missing   # 91% coverage
@@ -129,7 +133,6 @@ This is a static-analysis MVP. Known gaps, in rough priority order:
 - **Cross-server shadowing** (a tool description referencing another server's tools by name) isn't checked yet.
 - **LLM-assisted judging** — the current checks are regex/heuristic-based and will miss a paraphrased poisoning attempt; a semantic pass on top would catch what pattern matching can't.
 - **Dynamic analysis** — actually invoking tools with canary arguments in a sandbox and watching real syscalls/network activity, to catch what a static read of the description can't (e.g. a tool that behaves honestly in its description but does something else at runtime).
-- **Packaging** — no `pyproject.toml`/console-script entrypoint yet; currently run as `python -m mcp_scanner.cli`.
 
 ## Limitations
 
